@@ -1,5 +1,5 @@
 Dependencies for Project 'USART', Target 'USART': (DO NOT MODIFY !)
-F (.\main.c)(0x5ECCE4BC)(-c --cpu Cortex-M3 -g -O0 --apcs=interwork -I..\HARDWARE\LED -I..\SYSTEM\delay -I..\SYSTEM\sys -I..\SYSTEM\usart -I..\USER -I..\STM32F10x_FWLib\inc -I..\CORE -I..\HARDWARE\KEY -I..\HARDWARE\TIMER -I..\HARDWARE\SPI -I..\HARDWARE\TDC_GPX2 -I..\HARDWARE\LASER -I..\HARDWARE\MALLOC -I..\HARDWARE\OLED -I..\HARDWARE\TPL0202 -I..\HARDWARE\TLV5636 -I..\HARDWARE\AGC -I..\UCOSII\CONFIG -I..\UCOSII\CORE -I..\UCOSII\PORT-I E:\¼¤¹â²â¾à\LaserRangefinder_V6\Code\LaserRanging\USER\RTE-I C:\Keil_v5\ARM\PACK\Keil\STM32F1xx_DFP\1.0.5\Device\Include-I C:\Keil_v5\ARM\CMSIS\Include-D__UVISION_VERSION="514" -DSTM32F10X_MD -DUSE_STDPERIPH_DRIVER-o ..\obj\main.o --omf_browse ..\obj\main.crf --depend ..\obj\main.d)
+F (.\main.c)(0x5EDF48DA)(-c --cpu Cortex-M3 -g -O0 --apcs=interwork -I..\HARDWARE\LED -I..\SYSTEM\delay -I..\SYSTEM\sys -I..\SYSTEM\usart -I..\USER -I..\STM32F10x_FWLib\inc -I..\CORE -I..\HARDWARE\KEY -I..\HARDWARE\TIMER -I..\HARDWARE\SPI -I..\HARDWARE\TDC_GPX2 -I..\HARDWARE\LASER -I..\HARDWARE\MALLOC -I..\HARDWARE\OLED -I..\HARDWARE\TPL0202 -I..\HARDWARE\TLV5636 -I..\HARDWARE\AGC -I..\UCOSII\CONFIG -I..\UCOSII\CORE -I..\UCOSII\PORT-I E:\¼¤¹â²â¾à\LaserRangefinder_V6\Code\LaserRanging\USER\RTE-I C:\Keil_v5\ARM\PACK\Keil\STM32F1xx_DFP\1.0.5\Device\Include-I C:\Keil_v5\ARM\CMSIS\Include-D__UVISION_VERSION="514" -DSTM32F10X_MD -DUSE_STDPERIPH_DRIVER-o ..\obj\main.o --omf_browse ..\obj\main.crf --depend ..\obj\main.d)
 I (..\SYSTEM\sys\sys.h)(0x5EC52CC2)
 I (..\USER\stm32f10x.h)(0x5C380391)
 I (..\CORE\core_cm3.h)(0x4D523B58)
@@ -816,7 +816,7 @@ I (..\STM32F10x_FWLib\inc\stm32f10x_tim.h)(0x4D783BB4)
 I (..\STM32F10x_FWLib\inc\stm32f10x_usart.h)(0x5051A0AE)
 I (..\STM32F10x_FWLib\inc\stm32f10x_wwdg.h)(0x4D783BB4)
 I (..\STM32F10x_FWLib\inc\misc.h)(0x4D783BB4)
-F (..\README.TXT)(0x5EC38696)()
+F (..\README.TXT)(0x00000000)()
 F (..\UCOSII\CORE\os_core.c)(0x500F7BBA)(-c --cpu Cortex-M3 -g -O0 --apcs=interwork -I..\HARDWARE\LED -I..\SYSTEM\delay -I..\SYSTEM\sys -I..\SYSTEM\usart -I..\USER -I..\STM32F10x_FWLib\inc -I..\CORE -I..\HARDWARE\KEY -I..\HARDWARE\TIMER -I..\HARDWARE\SPI -I..\HARDWARE\TDC_GPX2 -I..\HARDWARE\LASER -I..\HARDWARE\MALLOC -I..\HARDWARE\OLED -I..\HARDWARE\TPL0202 -I..\HARDWARE\TLV5636 -I..\HARDWARE\AGC -I..\UCOSII\CONFIG -I..\UCOSII\CORE -I..\UCOSII\PORT-I E:\¼¤¹â²â¾à\LaserRangefinder_V6\Code\LaserRanging\USER\RTE-I C:\Keil_v5\ARM\PACK\Keil\STM32F1xx_DFP\1.0.5\Device\Include-I C:\Keil_v5\ARM\CMSIS\Include-D__UVISION_VERSION="514" -DSTM32F10X_MD -DUSE_STDPERIPH_DRIVER-o ..\obj\os_core.o --omf_browse ..\obj\os_core.crf --depend ..\obj\os_core.d)
 I (..\UCOSII\CONFIG\includes.h)(0x5290AD74)
 I (C:\Keil_v5\ARM\ARMCC\include\stdio.h)(0x5475F300)

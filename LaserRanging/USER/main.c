@@ -29,6 +29,21 @@
 /* todo: 确定测线问题原因，必要时需减小前级增益，打开AGC_LOW功能（可能会让近距离大目标不准） */
 /* date:2020.05.26 Emil: hdu_tangguodong@163.com */
 
+/* 经测试，对于不同反射目标，阈值时间差有不同的误差，特别是近距离阈值时间差 */
+/* 这个要解决有点恼火，软件上貌似无能为力，改善硬件或许是唯一的办法 */
+/* date:2020.05.29 Emil: hdu_tangguodong@163.com */
+
+/* 需要对拟合曲线不线性区域进行优化（暂时还没方法） */
+/* 增加自动档位切换模式代替基于脉冲峰值的AGC模式 实测发现测得更远了 最远稳定测到1030米 */
+/* date:2020.06.05 Emil: hdu_tangguodong@163.com */
+
+/* 针对近距离截止失真后阈值时间差跳动到非线性区域导致修正误差过大，
+在小于某一个距离时跳过阈值时间差落入非线性区域（1200~1500）的数据 */
+/* date:2020.06.09 Emil: hdu_tangguodong@163.com */
+
+/* 硬件版本：OPA842放大倍数2 */
+
+
 #include "sys.h"
 #include "delay.h"
 #include "usart.h"
@@ -43,12 +58,22 @@
 
 //#define DEBUG
 /* 校准调试模式参数设置 */
-//#define ADJ //校准调试模式 ,定义它将会启动校准模式
 #define STANDARD_DISTANCE 0 //测试目标标准距离
 #define INC_STEP 10         //增益增加步进
 #define MIN_GAIN 920       //最小增益 quantify DAC量化值
 #define MAX_GAIN 1350       //最大增益
 /**********************************************/
+/* 宏定义模式设置 */
+/* 通过注释或定义宏选择模式 */
+
+//#define ADJ //校准调试模式 ,定义它将会启动校准模式
+#define MULTI_VTH           //定义它将会把结果进行多阈值拟合校准
+//#define AGC_LOW   //如果定义AGC_LOW,AGC控制会将高于CONTROL_MAX_VOLTAGE的时候减少增益，否则只会增大增益
+#define AUTO_LEVEL_MOD //自动档位切换模式
+//#define ARGV  //是否将缓冲区结果求平均，不然取中值
+
+/**********************************************/
+
 
 /* 将浮点数转换为3个字节表示 */
 /* 阈值时间差 */
@@ -79,6 +104,14 @@ typedef struct TIME_PS_DATA
 	INT32U err_time2;
 	INT32U err_time3;
 }TIME_DATA;
+
+#define MAX_LEVEL 14
+/* 增益档位表 */
+const INT16U LEVEL[MAX_LEVEL] = 
+{
+	1200,1300,1400,1500,1600,1700,1800,1900,2000,2100,2200,2300,2400,2500
+};
+INT8U level = 0;//档位
 
 //UCOS 任务设置
 //设置开始任务优先级
@@ -121,7 +154,7 @@ void handle_task(void *pdata);
 void agc_task(void *pdata);
 void adj_task(void *pdata);
 
-#define DATA_GROUP_SIZE 10 //每一组接收数据长度
+#define DATA_GROUP_SIZE 8 //每一组接收数据长度
 #define QSTART_SIZE 256    //消息队列指针数组缓存区大小
 void *Qstart[QSTART_SIZE];//消息队列指针数组
 OS_EVENT *q_msg;//消息队列
@@ -139,7 +172,6 @@ INT8U ans_cnt = 0;//缓冲区中结果数量
 #define getbit(x,y) ((x)>>(y)&1)
 
 /* 初始化多阈值参数 */
-#define MULTI_VTH           //定义它将会把结果进行多阈值拟合校准
 #define QUANTIFY_INIT 1200  //初始化增益值 DAC
 #define START_THREAD 80			
 #define STOP_THREAD1 60
@@ -161,11 +193,12 @@ unsigned char AGC_EN;
 unsigned short quantify = QUANTIFY_INIT;//DAC 量化值
 INT32U detect_val = 0;//侦察阈值检测到的值 time_ps
 /* AGC Control parameter     */
-//#define AGC_LOW   //如果定义AGC_LOW,AGC控制会将高于CONTROL_MAX_VOLTAGE的时候减少增益，否则只会增大增益
 #define CONTROL_MAX_VOLTAGE 3
 #define FLOW_RANGE 0.2
 #define CONTROL_DIFF_TIME 2000
 #define TIME_FLOW_RANGE 200
+
+#define MAX_NO_DATA_CNT 4
 
 const int refclk_divisions = 125000;//8M晶振  ,TDC参考时钟
 
@@ -236,21 +269,236 @@ void start_task(void *pdata)
 	OS_EXIT_CRITICAL();//退出临界区，开中断
 }
 
-//#define ARGV  //是否将缓冲区结果求平均，不然取中值
+
 /* 主任务 */
 void master_task(void *pdata)
 {
 	OS_CPU_SR cpu_sr=0;
-	//INT32U distance = 0;
-	double d_distance = 0;
-	CH_DATA ch_distance;
+	INT32U time_ps = 0;
 	INT32U err_time = 0;
 	INT8U recive_flag = 0;//有数据标记
+	double d_distance = 0;
+	CH_DATA ch_distance;
+
+	#ifdef AUTO_LEVEL_MOD
+/**************************auto level mode*********************************/
+	INT8U level_stable=0;
+	INT8U no_data_cnt=0;
+	double org_data;
+	INT8U temp_cnt=0;
+	AGC_EN = 0;
+	
+	OSTaskSuspend(AGC_TASK_PRIO);//挂起AGC任务
+	level = 0;//初始化档位
+	OS_ENTER_CRITICAL();
+	quantify = LEVEL[level];//设置档位对应增益
+	setDacValueBin(quantify);
+	OS_EXIT_CRITICAL();
+	delay_ms(500);//上电等待500ms出数据
+	
+	while(1)
+	{
+		out_mode_set();//数据输出模式按键检测
+		if(outmode==1)
+		{
+			OS_ENTER_CRITICAL();
+			printf("q:%d\n",quantify);
+			OS_EXIT_CRITICAL();
+		}
+		/* 获得数据 */
+		OS_ENTER_CRITICAL();
+		if(ans_cnt!=0)//结果缓冲区里有数据
+		{
+			#ifdef ARGV //结果求平均
+			//将缓冲区里的数据求平均
+			//printf("ans_buf :");
+			for(master_i=0;master_i<ans_cnt;master_i++)
+			{
+				d_sum += ans_buf[master_i].time_ps;
+				e_sum += ans_buf[master_i].err_time;
+				//print_int_data(ans_buf[master_i].i_data);
+			}
+			//printf("\n");
+			//distance = d_sum/ans_cnt;
+			time_ps = d_sum/ans_cnt;
+			err_time = e_sum/ans_cnt;
+			#else //结果求中值
+			quick_sort_time_data(ans_buf,ans_cnt);
+			//distance = ans_buf[ans_cnt/2].i_data;
+			time_ps = ans_buf[ans_cnt/2].time_ps;
+			err_time = ans_buf[ans_cnt/2].err_time3;
+			#endif
+			if(time_ps<150000&&err_time>2200)//数据挑选，阈值时间差，距离
+			{				
+				recive_flag = 0;
+			}
+			else
+				recive_flag = 1;
+			ans_cnt = 0;
+			ans_ite = 0;			
+			#ifdef ARGV
+			e_sum = 0;
+			d_sum = 0;
+			#endif
+		}
+		else//缓冲区没有数据，标记为0
+		{
+			recive_flag = 0;
+		}
+		OS_EXIT_CRITICAL();
+		if(recive_flag)//缓冲区有数据
+		{
+			//有数据，档位固定
+			if(level_stable==0)
+			{
+				level_stable = 1;
+			}
+			no_data_cnt = 0;//一旦有数据，无数据计数清零
+			/* time_ps转距离double */
+			d_distance = (1.5*(double)time_ps)/10000;
+			org_data = d_distance;
+			//d_distance = u32_dou(distance);//转化为double
+			//通过阈值拟合校准
+			#ifdef MULTI_VTH
+			if(org_data<25.01)//近距离测量时跳过1200~1500的非线性区域
+			{
+				if(err_time>1500&&err_time<2000)
+				{
+					d_distance = d_distance-0.8541*my_log(-10.9372*err_time+11430)+3.019-0.5;
+					temp_cnt = 0;
+				}
+				else if(err_time>=2000)
+				{
+					d_distance = d_distance-0.0004*err_time-4.0737-0.5;
+					temp_cnt = 0;
+				}
+				else if(err_time<1150)
+				{
+					d_distance = d_distance-2.71;
+					temp_cnt = 0;
+				}
+				else//当阈值时间差处于1200~1500时
+				{
+					if(temp_cnt<10)//连续10次测到阈值时间差1200~1500时，输出一个差不多的数据吧，总比没数据强
+					{
+						CH_DATA temp;
+						temp_cnt++;
+						temp.f_data = 0xFF;
+						temp.h_data = 0xFF;
+						temp.l_data = 0xFF;
+						d_distance = ch_data_dou(&temp);
+					}
+					else
+					{
+						//d_distance = d_distance-3.2;
+						d_distance = d_distance-0.0004*err_time-4.0737;
+						temp_cnt = 0;
+					}					
+				}
+			}
+			else
+			{
+				temp_cnt = 0;
+				if(err_time>1120&&err_time<2000)
+				{
+					d_distance = d_distance-0.8541*my_log(-10.9372*err_time+11430)+3.019;
+				}
+				else if(err_time>=2000)
+				{
+					d_distance = d_distance-0.0004*err_time-4.0737-0.5;
+				}
+				else
+				{
+					d_distance = d_distance-2.71;
+				}
+			}
+			
+			#endif
+			if(outmode == 1)//串口助手调试输出格式
+			{
+				OS_ENTER_CRITICAL();
+				#ifdef MULTI_VTH
+				printf("No:%.2f\n",org_data);
+				printf("MV:");
+				#else
+				printf("No:");
+				#endif
+				printf("%.2f ",d_distance);
+				printf(" e:%d ",err_time);
+				printf("q:%d\n",quantify);
+				OS_EXIT_CRITICAL();
+			}
+			else//按照照相机要求的格式输出数据
+			{
+				OS_ENTER_CRITICAL();
+				ch_distance = dou_ch_data(&d_distance,err_time);
+				while(USART_GetFlagStatus(USART1, USART_FLAG_TC)==0);
+				USART_SendData(USART1,ch_distance.h_data);
+				while(USART_GetFlagStatus(USART1, USART_FLAG_TC)==0);
+				USART_SendData(USART1,ch_distance.l_data);
+				while(USART_GetFlagStatus(USART1, USART_FLAG_TC)==0);
+				USART_SendData(USART1,ch_distance.f_data);
+				OS_EXIT_CRITICAL();
+			}
+		}
+		else//没有数据
+		{
+			if(outmode==0)
+			{
+				OS_ENTER_CRITICAL();
+				while(USART_GetFlagStatus(USART1, USART_FLAG_TC)==0);
+				USART_SendData(USART1,0xFF);
+				while(USART_GetFlagStatus(USART1, USART_FLAG_TC)==0);
+				USART_SendData(USART1,0xFF);
+				while(USART_GetFlagStatus(USART1, USART_FLAG_TC)==0);
+				USART_SendData(USART1,0xFF);
+				OS_EXIT_CRITICAL();
+			}
+			//档位切换
+			if(level_stable==0)
+			{
+				if(level<MAX_LEVEL)
+				{
+					++level;
+				}
+				else
+				{
+					level_stable = 1;
+				}
+				OS_ENTER_CRITICAL();
+				quantify = LEVEL[level];
+				setDacValueBin(quantify);
+				OS_EXIT_CRITICAL();
+			}
+			else//档位已固定得情况下没有数据累计到一定次数后，重新设置档位
+			{
+				if(no_data_cnt<MAX_NO_DATA_CNT)
+				{
+					++no_data_cnt;
+				}
+				else
+				{
+					level_stable = 0;
+					no_data_cnt = 0;
+					level = 0;
+					OS_ENTER_CRITICAL();
+					quantify = LEVEL[level];
+					setDacValueBin(quantify);
+					OS_EXIT_CRITICAL();
+				}
+				
+			}
+		}
+		delay_ms(500);
+	}
+/**************************************************************************/	
+	#else	//AGC mode	
+/**************************AGC mode****************************************/
+	//INT32U distance = 0;
 	INT16U old_q = 0;
 	INT8U master_cnt=0;//master task循环计数 
 	INT8U res_cnt = 0;//在远近目标检测周期中的结果计数
 	INT8U detect_cnt = 0;//检测阈值在远近目标检测周期中的计数
-	INT32U time_ps = 0;
 	#ifdef ARGV
 	INT32U e_sum = 0;//阈值时间差求和
 	INT8U master_i;
@@ -314,8 +562,8 @@ void master_task(void *pdata)
 			}
 			old_q = 0;
 		}
-		/**********************************************************************************************************/
-	
+		
+		/* 获得数据 */
 		OS_ENTER_CRITICAL();
 		if(ans_cnt!=0)//结果缓冲区里有数据
 		{
@@ -354,9 +602,7 @@ void master_task(void *pdata)
 			recive_flag = 0;
 		}
 		OS_EXIT_CRITICAL();
-		
-		
-		
+				
 		/* 校准后输出结果 */
 		if(recive_flag)
 		{
@@ -517,8 +763,9 @@ void master_task(void *pdata)
 		
 		delay_ms(500);//每隔0.5秒查询结果并输出
 		master_cnt++;
-
 	}
+	#endif
+/*************************************************************************/
 }
 
 /* 生产者任务，获取飞行时间，阈值时间差 */
@@ -576,13 +823,16 @@ void gen_task(void *pdata)
 		{
 			data_vaild = 0;		
 		}
+//		else if(time_ps<300000&&err_time3>1120&&err_time3<1400)//跳过拟合非线性抖动区
+//		{
+//			data_vaild = 0;		
+//		}
 		else
 		{
 			data_vaild = 1;
 		}
 		#endif
 		
-		//if(distance>1500||distance<=0||data_vaild==0) continue;
 		if(time_ps>MAX_TIME||time_ps<=MIN_TIME||data_vaild==0)//当前没有数据，使用探测阈值侦察
 		{
 			//探测阈值测量数据
@@ -592,38 +842,22 @@ void gen_task(void *pdata)
 			{
 				if(time_ps_detect>DETECT_MIN_TIME&&time_ps_detect<MAX_TIME)
 				{
-					//test
-					//double test;
-					//test = (1.5*(double)time_ps_detect)/10000;
 					OS_ENTER_CRITICAL();
 					detect_val = time_ps_detect;
-					//printf("d:%.2f\n",test);
 					OS_EXIT_CRITICAL();
 					
 				}					
 			}
 			continue;
 		}			
-		
-		//ch_data = dou_ch_data(&distance,err_time3);	
 		create_time_data(&time_data,time_ps,err_time1,err_time2,err_time3);
-		//print_ch_data(&ch_data);
-		//printf("%d\n",err_time3);
-		
-		//org_data[org_data_ite++] = ch_data;//装载到数据缓冲区
-		org_data[org_data_ite++] = time_data;//装载到数据缓冲区
-				
+		org_data[org_data_ite++] = time_data;//装载到数据缓冲区			
 		if(org_data_ite==DATA_GROUP_SIZE)//数据缓冲数组填充满
 		{
 			org_data_ite = 0;
 			OSQPost(q_msg,org_data);//发送消息队列
-		}
-		
-		
+		}		
 		delay_ms(10);
-		//OS_ENTER_CRITICAL();
-		//printf("gen_task\r\n");
-		//OS_EXIT_CRITICAL();
 	}
 }
 
@@ -631,19 +865,11 @@ void gen_task(void *pdata)
 void handle_task(void *pdata)
 {
 	OS_CPU_SR cpu_sr=0;
-	//CH_DATA *res;
 	TIME_DATA *res;
 	INT8U err;
-	//INT_DATA int_data[DATA_GROUP_SIZE];//待处理数据缓冲区
 	TIME_DATA time_data[DATA_GROUP_SIZE];//待处理数据缓冲区
-	//INT32U err_data[DATA_GROUP_SIZE];//待处理阈值时间差缓冲区
 	int handle_i;
 	INT32U mid_pos = DATA_GROUP_SIZE/2;
-	
-	
-	//test
-	//OSTaskSuspend(HANDLE_TASK_PRIO);
-	
 	
 	while(1)
 	{
@@ -653,24 +879,16 @@ void handle_task(void *pdata)
 			#ifdef DEBUG
 			printf("OSQPend err %d",err);
 			#endif
-			//exit(0);
 		}
 		else
 		{			
 			for(handle_i=0;handle_i<DATA_GROUP_SIZE;handle_i++)
 			{
-				//int_data[handle_i].i_data = ch_data_u32(&res[handle_i]);
-				//int_data[handle_i].err_time = res[handle_i].err_time;
 				time_data[handle_i] = res[handle_i];
-				//err_data[handle_i] = res[handle_i].err_time;
-				//print_int_data(int_data[handle_i]);
 			}
-			//printf("\n");
 			
 			/* 中值滤波 */
-			//quick_sort_int_data(int_data,DATA_GROUP_SIZE);//快速排序
 			quick_sort_time_data(time_data,DATA_GROUP_SIZE);//快速排序
-			//quick_sort(err_buf,DATA_GROUP_SIZE);
 			/* 将取得的中值加入ans_buf结果缓冲区 */
 			OS_ENTER_CRITICAL();//ans_buf  ans_cnt  ans_ite 为临界资源
 			if(ans_cnt<ANS_BUF_SIZE)
@@ -679,15 +897,11 @@ void handle_task(void *pdata)
 			}
 			if(ans_ite==ANS_BUF_SIZE-1)//如果缓冲区已满，覆盖最开始的数据
 			{
-				//ans_buf[ans_ite] = int_data[mid_pos];
 				ans_buf[ans_ite] = time_data[mid_pos];
-				//err_buf[ans_ite] = err_data[mid_pos];
 				ans_ite = 0;
 			}
 			else
-			{
-				//err_buf[ans_ite] = err_data[mid_pos];
-				//ans_buf[ans_ite++] = int_data[mid_pos];								
+			{						
 				ans_buf[ans_ite++] = time_data[mid_pos];	
 			}
 			OS_EXIT_CRITICAL();			
@@ -1031,6 +1245,7 @@ void agc_control(OS_CPU_SR cpu_sr)
 				OS_EXIT_CRITICAL();
 			}
 			#endif
+
 }
 
 /* 构建TIME_DATA */
