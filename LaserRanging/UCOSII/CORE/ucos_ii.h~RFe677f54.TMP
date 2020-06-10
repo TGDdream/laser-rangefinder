@@ -696,7 +696,6 @@ OS_EXT  INT8U             OSTickStepState;          /* Indicates the state of th
 
 #if (OS_MEM_EN > 0u) && (OS_MAX_MEM_PART > 0u)
 OS_EXT  OS_MEM            OSMemTbl[OS_MAX_MEM_PART];/* Storage for memory partition manager            */
-OS_EXT OS_MEM* OSMemFreeList;
 #endif
 
 #if (OS_Q_EN > 0u) && (OS_MAX_QS > 0u)

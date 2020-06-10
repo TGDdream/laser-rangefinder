@@ -41,6 +41,9 @@
 在小于某一个距离时跳过阈值时间差落入非线性区域（1200~1500）的数据 */
 /* date:2020.06.09 Emil: hdu_tangguodong@163.com */
 
+/* 优化TDC-GPX2驱动程序，提供一次测量读取缓冲区所有数据 */
+/* date:2020.06.010 Emil: hdu_tangguodong@163.com */
+
 /* 硬件版本：OPA842放大倍数2 */
 
 
@@ -48,6 +51,7 @@
 #include "delay.h"
 #include "usart.h"
 #include "includes.h"
+
 #include "spi.h"
 #include "tdc_gpx2.h"
 #include "laser.h"
@@ -105,12 +109,19 @@ typedef struct TIME_PS_DATA
 	INT32U err_time3;
 }TIME_DATA;
 
-#define MAX_LEVEL 14
+#define MAX_LEVEL 9
 /* 增益档位表 */
 const INT16U LEVEL[MAX_LEVEL] = 
 {
-	1200,1300,1400,1500,1600,1700,1800,1900,2000,2100,2200,2300,2400,2500
+	1200,1300,1400,1500,1600,1700,1800,1900,2000
 };
+
+//#define MAX_LEVEL 1
+///* 增益档位表 */
+//const INT16U LEVEL[MAX_LEVEL] = 
+//{
+//	1200
+//};
 INT8U level = 0;//档位
 
 //UCOS 任务设置
@@ -185,7 +196,7 @@ INT8U ans_cnt = 0;//缓冲区中结果数量
 #define MAX_TIME 10000000 //最大飞行时间 1500米的时间 ps
 #define MIN_TIME 0        //最小飞行时间  
 #define DETECT_MIN_TIME 300000 //探测阈值最小飞行时间 45m
-#define MAX_ERR_TIME 8000 //最大阈值时间差
+#define MAX_ERR_TIME 10000 //最大阈值时间差
 #define MIN_ERR_TIME 0    //最小阈值时间差
 
 /* AGC 变量 */
@@ -254,6 +265,8 @@ void start_task(void *pdata)
 	AGC_EN=1;//开启AGC
 	pdata = pdata;//pdata没用时防止waring
 	q_msg = OSQCreate((void**)&Qstart[0],QSTART_SIZE);//创建消息队列
+	
+	
 	OS_ENTER_CRITICAL();//进入临界区，关中断
 	#ifdef ADJ  //调试校准模式
 	OSTaskCreate(gen_task,(void*)0,(OS_STK*)&GEN_TASK_STAK[GEN_STAK_SIZE-1],GEN_TASK_PRIO);
@@ -379,7 +392,7 @@ void master_task(void *pdata)
 				}
 				else//当阈值时间差处于1200~1500时
 				{
-					if(temp_cnt<10)//连续10次测到阈值时间差1200~1500时，输出一个差不多的数据吧，总比没数据强
+					if(temp_cnt<6)//连续10次测到阈值时间差1200~1500时，输出一个差不多的数据吧，总比没数据强
 					{
 						CH_DATA temp;
 						temp_cnt++;
@@ -390,8 +403,8 @@ void master_task(void *pdata)
 					}
 					else
 					{
-						//d_distance = d_distance-3.2;
-						d_distance = d_distance-0.0004*err_time-4.0737;
+						d_distance = d_distance-2.71;
+						//d_distance = d_distance-0.0004*err_time-4.0737;
 						temp_cnt = 0;
 					}					
 				}
@@ -418,14 +431,14 @@ void master_task(void *pdata)
 			{
 				OS_ENTER_CRITICAL();
 				#ifdef MULTI_VTH
-				printf("No:%.2f\n",org_data);
-				printf("MV:");
+				//printf("No:%.2f\n",org_data);
+				//printf("MV:");
 				#else
-				printf("No:");
+				//printf("No:");
 				#endif
-				printf("%.2f ",d_distance);
-				printf(" e:%d ",err_time);
-				printf("q:%d\n",quantify);
+				//printf("%.2f ",d_distance);
+				//printf(" e:%d ",err_time);
+				//printf("q:%d\n",quantify);
 				OS_EXIT_CRITICAL();
 			}
 			else//按照照相机要求的格式输出数据
@@ -457,7 +470,7 @@ void master_task(void *pdata)
 			//档位切换
 			if(level_stable==0)
 			{
-				if(level<MAX_LEVEL)
+				if(level<MAX_LEVEL-1)
 				{
 					++level;
 				}
@@ -629,13 +642,13 @@ void master_task(void *pdata)
 			{
 				OS_ENTER_CRITICAL();
 				#ifdef MULTI_VTH
-				printf("MV:");
+				//printf("MV:");
 				#else
-				printf("No:");
+				//printf("No:");
 				#endif
-				printf("%.2f ",d_distance);
-				printf(" e:%d ",err_time);
-				printf("q:%d\n",quantify);
+				//printf("%.2f ",d_distance);
+				//printf(" e:%d ",err_time);
+				//printf("q:%d\n",quantify);
 				OS_EXIT_CRITICAL();
 			}
 			else//按照照相机要求的格式输出数据
@@ -767,13 +780,16 @@ void master_task(void *pdata)
 	#endif
 /*************************************************************************/
 }
-
+#define MEASURE_DATA_ARR_SIZE 30
 /* 生产者任务，获取飞行时间，阈值时间差 */
 void gen_task(void *pdata)
 {
 	OS_CPU_SR cpu_sr=0;
 	/* TDC-GPX2 测量结果 */
 	result measure_data;
+	result measure_data_arr[MEASURE_DATA_ARR_SIZE];
+	INT8U res_cnt;
+	INT8U i_gen;
 	INT32U time_ps;//飞行时间 ps
 	INT32U time_ps_detect;//探测阈值测量数据
 	int err_time1,err_time2,err_time3;//阈值时间差
@@ -789,74 +805,80 @@ void gen_task(void *pdata)
 	
 	while(1)
 	{
-		tdc_measure(&measure_data);//测量一次
+		//tdc_measure(&measure_data);//测量一次
+		res_cnt = tdc_measure_group(measure_data_arr);
+		for(i_gen=0;i_gen<res_cnt;i_gen++)
+		{
+			//飞行时间计算
+			time_ps = measure_data_arr[i_gen].stopresult[1] - measure_data_arr[i_gen].stopresult[0]+\
+								(measure_data_arr[i_gen].reference_index[1]-measure_data_arr[i_gen].reference_index[0])*refclk_divisions;
+			//vth1--vth2阈值时间差计算
+			err_time1 = measure_data_arr[i_gen].stopresult[2] - measure_data_arr[i_gen].stopresult[1]+\
+								(measure_data_arr[i_gen].reference_index[2]-measure_data_arr[i_gen].reference_index[1])*refclk_divisions;
+			//vth2--vth3阈值时间差计算
+			//err_time2 = measure_data.stopresult[3] - measure_data.stopresult[2]+\
+								(measure_data.reference_index[3]-measure_data.reference_index[2])*refclk_divisions;
+			//vth1--vth3阈值时间差计算
+			err_time3 = measure_data_arr[i_gen].stopresult[3] - measure_data_arr[i_gen].stopresult[1]+\
+								(measure_data_arr[i_gen].reference_index[3]-measure_data_arr[i_gen].reference_index[1])*refclk_divisions;
+			//OS_ENTER_CRITICAL();
+			//printf("i_gen:%d,d:%.2f,err_time:%d\n",i_gen,(1.5*(double)time_ps)/10000,err_time3);
+			//OS_EXIT_CRITICAL();
+			
+			/*  有效值筛选 */
+			//数据有效筛选,排除掉对空噪值，通过增益和距离筛选
+			//if((quantify>GAIN_TH)&&(distance<DISTANCE_TH))
+			#ifdef ADJ
+			if((1.5*(double)time_ps)/10000 >= STANDARD_DISTANCE)
+				data_vaild = 1;
+			else
+				data_vaild = 0;
+			
+			#else
+			if((quantify>GAIN_TH)&&(time_ps<TIME_PS_TH))
+			{
+					data_vaild = 0;
+			}
+			else if(err_time3>MAX_ERR_TIME||err_time3<MIN_ERR_TIME)
+			{
+				data_vaild = 0;		
+			}
+			else
+			{
+				data_vaild = 1;
+			}
+			#endif
+			
+			if(time_ps>MAX_TIME||time_ps<=MIN_TIME||data_vaild==0)//当前没有数据
+			{
+				continue;
+			}
+						
+			create_time_data(&time_data,time_ps,err_time1,err_time2,err_time3);
+			org_data[org_data_ite++] = time_data;//装载到数据缓冲区			
+			if(org_data_ite==DATA_GROUP_SIZE)//数据缓冲数组填充满
+			{
+				org_data_ite = 0;
+				OSQPost(q_msg,org_data);//发送消息队列
+			}		
+			
+		}
 		//飞行时间计算
-		time_ps = measure_data.stopresult[1] - measure_data.stopresult[0]+\
+		//time_ps = measure_data.stopresult[1] - measure_data.stopresult[0]+\
 							(measure_data.reference_index[1]-measure_data.reference_index[0])*refclk_divisions;
 		//vth1--vth2阈值时间差计算
-		err_time1 = measure_data.stopresult[2] - measure_data.stopresult[1]+\
+		//err_time1 = measure_data.stopresult[2] - measure_data.stopresult[1]+\
 							(measure_data.reference_index[2]-measure_data.reference_index[1])*refclk_divisions;
 		//vth2--vth3阈值时间差计算
 		//err_time2 = measure_data.stopresult[3] - measure_data.stopresult[2]+\
 							(measure_data.reference_index[3]-measure_data.reference_index[2])*refclk_divisions;
 		//vth1--vth3阈值时间差计算
-		err_time3 = measure_data.stopresult[3] - measure_data.stopresult[1]+\
+		//err_time3 = measure_data.stopresult[3] - measure_data.stopresult[1]+\
 							(measure_data.reference_index[3]-measure_data.reference_index[1])*refclk_divisions;
 		//距离计算
 		//distance = (1.5*(double)time_ps)/10000;
 		
-		/*  有效值筛选 */
-		//数据有效筛选,排除掉对空噪值，通过增益和距离筛选
-		//if((quantify>GAIN_TH)&&(distance<DISTANCE_TH))
-		#ifdef ADJ
-		if((1.5*(double)time_ps)/10000 >= STANDARD_DISTANCE)
-			data_vaild = 1;
-		else
-			data_vaild = 0;
-		
-		#else
-		if((quantify>GAIN_TH)&&(time_ps<TIME_PS_TH))
-		{
-				data_vaild = 0;
-		}
-		else if(err_time3>MAX_ERR_TIME||err_time3<MIN_ERR_TIME)
-		{
-			data_vaild = 0;		
-		}
-//		else if(time_ps<300000&&err_time3>1120&&err_time3<1400)//跳过拟合非线性抖动区
-//		{
-//			data_vaild = 0;		
-//		}
-		else
-		{
-			data_vaild = 1;
-		}
-		#endif
-		
-		if(time_ps>MAX_TIME||time_ps<=MIN_TIME||data_vaild==0)//当前没有数据，使用探测阈值侦察
-		{
-			//探测阈值测量数据
-			time_ps_detect = measure_data.stopresult[2] - measure_data.stopresult[0]+\
-							(measure_data.reference_index[2]-measure_data.reference_index[0])*refclk_divisions;
-			if(!((quantify>GAIN_TH)&&(time_ps_detect<TIME_PS_TH)))
-			{
-				if(time_ps_detect>DETECT_MIN_TIME&&time_ps_detect<MAX_TIME)
-				{
-					OS_ENTER_CRITICAL();
-					detect_val = time_ps_detect;
-					OS_EXIT_CRITICAL();
-					
-				}					
-			}
-			continue;
-		}			
-		create_time_data(&time_data,time_ps,err_time1,err_time2,err_time3);
-		org_data[org_data_ite++] = time_data;//装载到数据缓冲区			
-		if(org_data_ite==DATA_GROUP_SIZE)//数据缓冲数组填充满
-		{
-			org_data_ite = 0;
-			OSQPost(q_msg,org_data);//发送消息队列
-		}		
+
 		delay_ms(10);
 	}
 }

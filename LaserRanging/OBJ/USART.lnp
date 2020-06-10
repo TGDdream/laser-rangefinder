@@ -6,7 +6,6 @@
 "..\obj\spi.o"
 "..\obj\tdc_gpx2.o"
 "..\obj\laser.o"
-"..\obj\malloc.o"
 "..\obj\oled.o"
 "..\obj\tpl0202.o"
 "..\obj\tlv5636.o"

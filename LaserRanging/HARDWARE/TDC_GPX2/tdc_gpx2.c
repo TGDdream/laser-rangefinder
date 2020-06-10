@@ -132,7 +132,7 @@ void tdc_config()
 	}
 }
 
-/* 测量一次，获得测量结果 */
+/* 测量一次，获得一次测量结果 */
 void tdc_measure(p_result presult)
 {
 	OS_CPU_SR cpu_sr=0;
@@ -179,5 +179,75 @@ void tdc_measure(p_result presult)
 	}
 	OS_EXIT_CRITICAL();
 	
+}
+
+/* 一次脉冲发射读取所有的数据 */
+/* presult 结果数组缓冲区首地址 */
+/* 返回结果数量 */
+unsigned char tdc_measure_group(p_result presult)
+{
+	OS_CPU_SR cpu_sr=0;
+	unsigned char res_cnt=0;
+	int reference_index;
+	int stopresult;
+	//Initialize to zero
+//	for(i=0;i<4;i++)
+//	{
+//		presult->reference_index[i] = 0;
+//		presult->stopresult[i] = 0;
+//		presult->reference_index[i] = 0;
+//		presult->stopresult[i] = 0;
+//	}
+	
+	while(GPIO_INTERRUPT!=0)
+	{
+		laser_plus();
+		delay_ms(1);
+	}
+	
+	while(GPIO_INTERRUPT==0)//TDC结果FIFO缓冲区中还有数据未读出
+	{
+		GPIO_SSN = 1;
+		GPIO_SSN = 0;
+		
+		OS_ENTER_CRITICAL();
+		send_byte_to_SPI(spiopc_read_results+reference_index_ch1_byte3);
+		
+		for(i=0;i<4;i++)
+		{
+			reference_index = 0;
+			stopresult = 0;
+			
+			read_byte_from_SPI(&Buffer);
+			reference_index = reference_index+(Buffer<<16);
+			//presult->reference_index[i] = presult->reference_index[i] + (Buffer<<16);
+			
+			read_byte_from_SPI(&Buffer);
+			reference_index = reference_index+(Buffer<<8);
+			//presult->reference_index[i] = presult->reference_index[i] + (Buffer<<8);
+			
+			read_byte_from_SPI(&Buffer);
+			reference_index = reference_index+Buffer;
+			//presult->reference_index[i] = presult->reference_index[i] + Buffer;
+			
+			read_byte_from_SPI(&Buffer);
+			stopresult = stopresult+(Buffer<<16);
+			//presult->stopresult[i] = presult->stopresult[i] + (Buffer<<16);
+			
+			read_byte_from_SPI(&Buffer);
+			stopresult = stopresult+(Buffer<<8);
+			//presult->stopresult[i] = presult->stopresult[i] + (Buffer<<8);
+			
+			read_byte_from_SPI(&Buffer);
+			stopresult = stopresult+Buffer;
+			//presult->stopresult[i] = presult->stopresult[i] + Buffer;
+			
+			presult[res_cnt].reference_index[i] = reference_index;
+			presult[res_cnt].stopresult[i] = stopresult;
+		}
+		OS_EXIT_CRITICAL();
+		++res_cnt;
+	}	
+	return res_cnt;
 }
 

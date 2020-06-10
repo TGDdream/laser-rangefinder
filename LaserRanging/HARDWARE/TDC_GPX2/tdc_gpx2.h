@@ -10,6 +10,7 @@
 #define DISABLE PAout(12)
 #define PARITY PBin(5)
 
+/* 结果结构体 */
 typedef struct result_format{
 	int reference_index[4];
 	int stopresult[4];
@@ -19,5 +20,6 @@ typedef struct result_format{
 void tdc_init(void);
 void tdc_config(void);
 void tdc_measure(p_result presult);
+unsigned char tdc_measure_group(p_result presult);
 
 #endif

@@ -27,10 +27,17 @@ Project File Date:  05/25/2020
 <h2>Output:</h2>
 Build target 'USART'
 compiling main.c...
+main.c(784): warning:  #177-D: variable "cpu_sr" was declared but never referenced
+        OS_CPU_SR cpu_sr=0;
+main.c(786): warning:  #177-D: variable "measure_data" was declared but never referenced
+        result measure_data;
+main.c(791): warning:  #177-D: variable "time_ps_detect" was declared but never referenced
+        INT32U time_ps_detect;//探测阈值测量数据
+main.c: 3 warnings, 0 errors
 linking...
-Program Size: Code=28152 RO-data=864 RW-data=176 ZI-data=1053768  
+Program Size: Code=28760 RO-data=856 RW-data=180 ZI-data=9412  
 FromELF: creating hex file...
-"..\OBJ\USART.axf" - 0 Error(s), 0 Warning(s).
+"..\OBJ\USART.axf" - 0 Error(s), 3 Warning(s).
 
 <h2>Collection of Component include folders:</h2>
   E:\激光测距\LaserRangefinder_V6\Code\LaserRanging\USER\RTE
