@@ -33,3 +33,4 @@
 ..\obj\stm32f10x_it.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdio.h
 ..\obj\stm32f10x_it.o: ..\SYSTEM\sys\sys.h
 ..\obj\stm32f10x_it.o: ..\SYSTEM\delay\delay.h
+..\obj\stm32f10x_it.o: ..\HARDWARE\KEY\key.h

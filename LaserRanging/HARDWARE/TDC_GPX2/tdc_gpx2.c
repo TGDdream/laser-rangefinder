@@ -51,8 +51,8 @@ const char stopresult_ch4_byte1 = 31;
 //----------------------------------------
 //***Other Variables***
 //----------------------------------------
-unsigned char Buffer = 0;
-char i = 0;
+//unsigned char Buffer = 0;
+//char i = 0;
 //int reference_index[4] = {0,0,0,0};
 //int stopresult[4] = {0,0,0,0};
 char config_error = false;
@@ -80,6 +80,8 @@ void tdc_init()
 
 void tdc_config()
 {
+	int i;
+	unsigned char Buffer = 0;
 	//---------------------------------------
 	//***Power on reset***
 	//---------------------------------------
@@ -135,6 +137,8 @@ void tdc_config()
 /* 测量一次，获得一次测量结果 */
 void tdc_measure(p_result presult)
 {
+	unsigned char Buffer = 0;
+	int i;
 	OS_CPU_SR cpu_sr=0;
 	//Initialize to zero
 	for(i=0;i<4;i++)
@@ -186,7 +190,9 @@ void tdc_measure(p_result presult)
 /* 返回结果数量 */
 unsigned char tdc_measure_group(p_result presult)
 {
-	OS_CPU_SR cpu_sr=0;
+	//OS_CPU_SR cpu_sr=0;
+	unsigned char Buffer = 0;
+	int i;
 	unsigned char res_cnt=0;
 	int reference_index;
 	int stopresult;
@@ -201,16 +207,20 @@ unsigned char tdc_measure_group(p_result presult)
 	
 	while(GPIO_INTERRUPT!=0)
 	{
+		
 		laser_plus();
 		delay_ms(1);
+		//OS_ENTER_CRITICAL();
+		//printf("test\n");		
+		//OS_EXIT_CRITICAL();
 	}
 	
 	while(GPIO_INTERRUPT==0)//TDC结果FIFO缓冲区中还有数据未读出
 	{
 		GPIO_SSN = 1;
 		GPIO_SSN = 0;
-		
-		OS_ENTER_CRITICAL();
+		//printf("test2\n");	
+		//OS_ENTER_CRITICAL();
 		send_byte_to_SPI(spiopc_read_results+reference_index_ch1_byte3);
 		
 		for(i=0;i<4;i++)
@@ -245,7 +255,8 @@ unsigned char tdc_measure_group(p_result presult)
 			presult[res_cnt].reference_index[i] = reference_index;
 			presult[res_cnt].stopresult[i] = stopresult;
 		}
-		OS_EXIT_CRITICAL();
+		//printf("%d %d\n",stopresult,reference_index);
+		//OS_EXIT_CRITICAL();
 		++res_cnt;
 	}	
 	return res_cnt;

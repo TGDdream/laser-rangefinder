@@ -48,3 +48,4 @@
 ..\obj\main.o: ..\HARDWARE\TLV5636\tlv5636.h
 ..\obj\main.o: ..\HARDWARE\AGC\agc.h
 ..\obj\main.o: ..\HARDWARE\KEY\key.h
+..\obj\main.o: ..\HARDWARE\WDG\wdg.h

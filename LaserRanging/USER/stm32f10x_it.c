@@ -25,7 +25,7 @@
 #include "stm32f10x_it.h" 
 #include "usart.h"
 #include "delay.h"
-
+#include "key.h"
 
  
 void NMI_Handler(void)
@@ -35,7 +35,8 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
 	//_asm voalite("BKPT #1");
-	printf("HardFault_Handler\r\n");
+	if(OUT_MODE==1)
+		printf("HardFault_Handler\r\n");
   /* Go to infinite loop when Hard Fault exception occurs */
   while (1)
   {

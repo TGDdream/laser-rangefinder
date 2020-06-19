@@ -42,9 +42,24 @@
 /* date:2020.06.09 Emil: hdu_tangguodong@163.com */
 
 /* 优化TDC-GPX2驱动程序，提供一次测量读取缓冲区所有数据 */
-/* date:2020.06.010 Emil: hdu_tangguodong@163.com */
+/* date:2020.06.10 Emil: hdu_tangguodong@163.com */
+
+/* 优化BUG ,stop通道读取的所有数据，都应该减去start通道读取的第一次数据，后面再读start通道都是0 */
+/* 硬件问题：stop通道输入的脉冲有负电压，超过了手册给出的-0.3V，导致有错误数据输出 */
+/* 解决思路：加二极管到地，对电压进行钳位 目前电路暂且定型，以后有机会再测试修改硬件 */
+/* 最重要的问题1：由于之前的接收发射坏了换了个镜头和接收发射，发现和之前的回波特性不同，
+		可能增益更大，导致每套设备可能都要修改程序参数 */
+/* 最重要的问题2：严重怀疑干扰脉冲是硬件本身产生的，因为换了个镜头和接收发射小板，干扰脉冲的位置从十几米左右变到了5米
+		而且干扰脉冲似乎变大了 猜测不一定对 */
+		/* todo: 可以改进去除干扰脉冲的方式，一次测量得到的几组数据中只有一个是正确数据， */		
+/* date:2020.06.15 Emil: hdu_tangguodong@163.com */
+
+/* 加入看门狗，避免由于错误的脉冲输入导致TDC芯片的INTERUPT状态一直处于0，无法跳出读取FIFO数据的循环，导致程序跑飞 */
+/* date:2020.06.19 Emil: hdu_tangguodong@163.com */
 
 /* 硬件版本：OPA842放大倍数2 */
+
+
 
 
 #include "sys.h"
@@ -59,6 +74,7 @@
 #include "tlv5636.h"
 #include "agc.h"
 #include "key.h"
+#include "wdg.h"
 
 //#define DEBUG
 /* 校准调试模式参数设置 */
@@ -73,7 +89,7 @@
 //#define ADJ //校准调试模式 ,定义它将会启动校准模式
 #define MULTI_VTH           //定义它将会把结果进行多阈值拟合校准
 //#define AGC_LOW   //如果定义AGC_LOW,AGC控制会将高于CONTROL_MAX_VOLTAGE的时候减少增益，否则只会增大增益
-#define AUTO_LEVEL_MOD //自动档位切换模式
+#define AUTO_LEVEL_MOD //自动档位切换模式 不定义则为AGC模式
 //#define ARGV  //是否将缓冲区结果求平均，不然取中值
 
 /**********************************************/
@@ -109,12 +125,13 @@ typedef struct TIME_PS_DATA
 	INT32U err_time3;
 }TIME_DATA;
 
-#define MAX_LEVEL 9
+#define MAX_LEVEL 8
 /* 增益档位表 */
 const INT16U LEVEL[MAX_LEVEL] = 
 {
-	1200,1300,1400,1500,1600,1700,1800,1900,2000
+	1100,1200,1300,1400,1500,1600,1700,1800
 };
+
 
 //#define MAX_LEVEL 1
 ///* 增益档位表 */
@@ -186,7 +203,7 @@ INT8U ans_cnt = 0;//缓冲区中结果数量
 #define QUANTIFY_INIT 1200  //初始化增益值 DAC
 #define START_THREAD 80			
 #define STOP_THREAD1 60
-#define STOP_THREAD2 40
+#define STOP_THREAD2 100
 #define STOP_THREAD3 80
 
 /* 数据筛选校准参数 */
@@ -231,6 +248,7 @@ void create_time_data(TIME_DATA* ptime_data,INT32U time_ps,INT32U err_time1,INT3
 
 int main(void)
 {
+	p_result test;
 	NVIC_PriorityGroupConfig(NVIC_PriorityGroup_2);//设置中断优先级分组为组2：2位抢占优先级，2位响应优先级
 	delay_init();
 	uart_init(9600);
@@ -248,7 +266,18 @@ int main(void)
 	write_wa(STOP_THREAD2,&TPL2_CS,&TPL2_CLK,&TPL2_D);//set voltage thread of stop2 pulse
 	write_wb(STOP_THREAD3,&TPL2_CS,&TPL2_CLK,&TPL2_D);//set voltage thread of stop3 pulse
 	setRefValue(REF1);//set tlv5636 ref voltage mode
+	//quantify = 1800;
 	setDacValueBin(quantify);//初始化DAC输出电压,默认增益
+	
+	/*test*/
+//	while(1)
+//	{
+//		//tdc_measure_group(test);
+//		laser_plus();
+//		//printf("test1\n");
+//		delay_ms(10);
+//	}
+	
 	//delay_ms(100);
 	OSInit();//初始化RTOS 启动启动线程
 	OSTaskCreate(start_task,(void*)0,(OS_STK*)&START_TASK_STAK[START_STAK_SIZE-1],START_TASK_PRIO);
@@ -266,6 +295,7 @@ void start_task(void *pdata)
 	pdata = pdata;//pdata没用时防止waring
 	q_msg = OSQCreate((void**)&Qstart[0],QSTART_SIZE);//创建消息队列
 	
+	IWDG_Init(4,1000);//设置看门狗 1.6s 
 	
 	OS_ENTER_CRITICAL();//进入临界区，关中断
 	#ifdef ADJ  //调试校准模式
@@ -371,23 +401,28 @@ void master_task(void *pdata)
 			d_distance = (1.5*(double)time_ps)/10000;
 			org_data = d_distance;
 			//d_distance = u32_dou(distance);//转化为double
+			if(outmode==1)
+			{
+				printf("ORG:%.2f %d\n",org_data,err_time);
+			}
+			
 			//通过阈值拟合校准
 			#ifdef MULTI_VTH
 			if(org_data<25.01)//近距离测量时跳过1200~1500的非线性区域
 			{
 				if(err_time>1500&&err_time<2000)
 				{
-					d_distance = d_distance-0.8541*my_log(-10.9372*err_time+11430)+3.019-0.5;
+					d_distance = d_distance-0.8541*my_log(-10.9372*err_time+11430)+3.019-0.5+2.2;
 					temp_cnt = 0;
 				}
 				else if(err_time>=2000)
 				{
-					d_distance = d_distance-0.0004*err_time-4.0737-0.5;
+					d_distance = d_distance-0.0004*err_time-4.0737-0.5+2.2;
 					temp_cnt = 0;
 				}
 				else if(err_time<1150)
 				{
-					d_distance = d_distance-2.71;
+					d_distance = d_distance-0.5;
 					temp_cnt = 0;
 				}
 				else//当阈值时间差处于1200~1500时
@@ -403,7 +438,7 @@ void master_task(void *pdata)
 					}
 					else
 					{
-						d_distance = d_distance-2.71;
+						d_distance = d_distance-0.5;
 						//d_distance = d_distance-0.0004*err_time-4.0737;
 						temp_cnt = 0;
 					}					
@@ -414,15 +449,15 @@ void master_task(void *pdata)
 				temp_cnt = 0;
 				if(err_time>1120&&err_time<2000)
 				{
-					d_distance = d_distance-0.8541*my_log(-10.9372*err_time+11430)+3.019;
+					d_distance = d_distance-0.8541*my_log(-10.9372*err_time+11430)+3.019-0.5+2.2;
 				}
 				else if(err_time>=2000)
 				{
-					d_distance = d_distance-0.0004*err_time-4.0737-0.5;
+					d_distance = d_distance-0.0004*err_time-4.0737-0.5+2.2;
 				}
 				else
 				{
-					d_distance = d_distance-2.71;
+					d_distance = d_distance-0.5;
 				}
 			}
 			
@@ -432,11 +467,11 @@ void master_task(void *pdata)
 				OS_ENTER_CRITICAL();
 				#ifdef MULTI_VTH
 				//printf("No:%.2f\n",org_data);
-				//printf("MV:");
+				printf("MV:");
 				#else
-				//printf("No:");
+				printf("No:");
 				#endif
-				//printf("%.2f ",d_distance);
+				printf("%.2f ",d_distance);
 				//printf(" e:%d ",err_time);
 				//printf("q:%d\n",quantify);
 				OS_EXIT_CRITICAL();
@@ -793,6 +828,8 @@ void gen_task(void *pdata)
 	INT32U time_ps;//飞行时间 ps
 	INT32U time_ps_detect;//探测阈值测量数据
 	int err_time1,err_time2,err_time3;//阈值时间差
+	long start_res;
+	long start_index;
 	//double distance;//未处理距离
 	//CH_DATA org_data[DATA_GROUP_SIZE];//数据缓冲数组，当填充满时通过消息队列发送给消费者任务
 	TIME_DATA org_data[DATA_GROUP_SIZE];//数据缓冲数组，当填充满时通过消息队列发送给消费者任务
@@ -806,12 +843,18 @@ void gen_task(void *pdata)
 	while(1)
 	{
 		//tdc_measure(&measure_data);//测量一次
+		OS_ENTER_CRITICAL();
 		res_cnt = tdc_measure_group(measure_data_arr);
+		//printf("test3\n");
+		OS_EXIT_CRITICAL();
+		IWDG_Feed();//喂狗 防止TDC芯片跑飞
+		start_res = measure_data_arr[0].stopresult[0];
+		start_index = measure_data_arr[0].reference_index[0];
 		for(i_gen=0;i_gen<res_cnt;i_gen++)
 		{
 			//飞行时间计算
-			time_ps = measure_data_arr[i_gen].stopresult[1] - measure_data_arr[i_gen].stopresult[0]+\
-								(measure_data_arr[i_gen].reference_index[1]-measure_data_arr[i_gen].reference_index[0])*refclk_divisions;
+			time_ps = measure_data_arr[i_gen].stopresult[1] - start_res+\
+								(measure_data_arr[i_gen].reference_index[1]-start_index)*refclk_divisions;
 			//vth1--vth2阈值时间差计算
 			err_time1 = measure_data_arr[i_gen].stopresult[2] - measure_data_arr[i_gen].stopresult[1]+\
 								(measure_data_arr[i_gen].reference_index[2]-measure_data_arr[i_gen].reference_index[1])*refclk_divisions;
@@ -835,6 +878,7 @@ void gen_task(void *pdata)
 				data_vaild = 0;
 			
 			#else
+			
 			if((quantify>GAIN_TH)&&(time_ps<TIME_PS_TH))
 			{
 					data_vaild = 0;
