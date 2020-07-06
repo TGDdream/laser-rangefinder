@@ -21,7 +21,7 @@
 //#define WK_UP PAin(0)	//PA0  WK_UP
 
 #define WK_UP   GPIO_ReadInputDataBit(GPIOA,GPIO_Pin_0)//读取按键3(WK_UP) 
-#define OUT_MODE GPIO_ReadInputDataBit(GPIOA,GPIO_Pin_0)//输出模式切换按键
+#define MODE GPIO_ReadInputDataBit(GPIOA,GPIO_Pin_0)//模式切换按键
  
 
 //#define KEY0_PRES 	1	//KEY0按下

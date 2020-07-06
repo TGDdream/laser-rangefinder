@@ -57,7 +57,8 @@
 /* 加入看门狗，避免由于错误的脉冲输入导致TDC芯片的INTERUPT状态一直处于0，无法跳出读取FIFO数据的循环，导致程序跑飞 */
 /* date:2020.06.19 Emil: hdu_tangguodong@163.com */
 
-/* 硬件版本：OPA842放大倍数2 */
+/* 增加用户输入测量模式  是测线还是测墙 */
+/* date:2020.07.06 Emil: hdu_tangguodong@163.com */
 
 
 
@@ -87,7 +88,7 @@
 /* 通过注释或定义宏选择模式 */
 
 //#define ADJ //校准调试模式 ,定义它将会启动校准模式
-//#define MULTI_VTH           //定义它将会把结果进行多阈值拟合校准
+#define MULTI_VTH           //定义它将会把结果进行多阈值拟合校准
 //#define AGC_LOW   //如果定义AGC_LOW,AGC控制会将高于CONTROL_MAX_VOLTAGE的时候减少增益，否则只会增大增益
 #define AUTO_LEVEL_MOD //自动档位切换模式 不定义则为AGC模式
 //#define ARGV  //是否将缓冲区结果求平均，不然取中值
@@ -125,19 +126,29 @@ typedef struct TIME_PS_DATA
 	INT32U err_time3;
 }TIME_DATA;
 
-#define MAX_LEVEL 8
+//#define MAX_LEVEL 8
+///* 增益档位表 */
+//const INT16U LEVEL[MAX_LEVEL] = 
+//{
+//	1100,1200,1300,1400,1500,1600,1700,1800
+//};
+#define MAX_LEVEL 9
 /* 增益档位表 */
 const INT16U LEVEL[MAX_LEVEL] = 
 {
-	1100,1200,1300,1400,1500,1600,1700,1800
+	1100,1150,1200,1250,1300,1350,1400,1450,1500
 };
 
+enum {
+	wall,//测墙模式
+	line//测线模式
+};
 
 //#define MAX_LEVEL 1
 ///* 增益档位表 */
 //const INT16U LEVEL[MAX_LEVEL] = 
 //{
-//	1100
+//	1300
 //};
 INT8U level = 0;//档位
 
@@ -231,6 +242,8 @@ INT32U detect_val = 0;//侦察阈值检测到的值 time_ps
 const int refclk_divisions = 125000;//8M晶振  ,TDC参考时钟
 
 unsigned char outmode = 0;//数据输出模式 0:输出到照相机的格式  1:打印到串口调试字符格式
+unsigned char measure_mode = wall;//测量模式，测线模式，测墙模式
+
 void out_mode_set(void);
 double ch_data_dou(CH_DATA* pch_data);
 CH_DATA dou_ch_data(double* d_data,INT32U err_time);
@@ -244,11 +257,11 @@ void print_int_data(INT32U int_data);
 double my_log(double a);
 void agc_control(OS_CPU_SR cpu_sr);
 void create_time_data(TIME_DATA* ptime_data,INT32U time_ps,INT32U err_time1,INT32U err_time2,INT32U err_time3);
+double multi_thread_adj(double *org,unsigned int *time);
 
 
 int main(void)
 {
-	p_result test;
 	NVIC_PriorityGroupConfig(NVIC_PriorityGroup_2);//设置中断优先级分组为组2：2位抢占优先级，2位响应优先级
 	delay_init();
 	uart_init(9600);
@@ -266,19 +279,7 @@ int main(void)
 	write_wa(STOP_THREAD2,&TPL2_CS,&TPL2_CLK,&TPL2_D);//set voltage thread of stop2 pulse
 	write_wb(STOP_THREAD3,&TPL2_CS,&TPL2_CLK,&TPL2_D);//set voltage thread of stop3 pulse
 	setRefValue(REF1);//set tlv5636 ref voltage mode
-	//quantify = 1500;
 	setDacValueBin(quantify);//初始化DAC输出电压,默认增益
-	
-	/*test*/
-//	while(1)
-//	{
-//		//tdc_measure_group(test);
-//		laser_plus();
-//		//printf("test1\n");
-//		delay_ms(50);
-//	}
-	
-	//delay_ms(100);
 	OSInit();//初始化RTOS 启动启动线程
 	OSTaskCreate(start_task,(void*)0,(OS_STK*)&START_TASK_STAK[START_STAK_SIZE-1],START_TASK_PRIO);
 	OSStart();
@@ -314,13 +315,14 @@ void start_task(void *pdata)
 
 #define coe 1.4
 /* 主任务 */
+double d_distance = 0;
 void master_task(void *pdata)
 {
 	OS_CPU_SR cpu_sr=0;
 	INT32U time_ps = 0;
 	INT32U err_time = 0;
 	INT8U recive_flag = 0;//有数据标记
-	double d_distance = 0;
+	//double d_distance = 0;
 	CH_DATA ch_distance;
 
 	#ifdef AUTO_LEVEL_MOD
@@ -328,7 +330,6 @@ void master_task(void *pdata)
 	INT8U level_stable=0;
 	INT8U no_data_cnt=0;
 	double org_data;
-	INT8U temp_cnt=0;
 	AGC_EN = 0;
 	
 	OSTaskSuspend(AGC_TASK_PRIO);//挂起AGC任务
@@ -341,7 +342,6 @@ void master_task(void *pdata)
 	
 	while(1)
 	{
-		out_mode_set();//数据输出模式按键检测
 		if(outmode==1)
 		{
 			OS_ENTER_CRITICAL();
@@ -419,65 +419,23 @@ void master_task(void *pdata)
 			
 			//通过阈值拟合校准
 			#ifdef MULTI_VTH
-			if(org_data<15.01)
+			switch(measure_mode)
 			{
-//				if(err_time>1500&&err_time<2000)
-//				{
-//					d_distance = d_distance-0.8541*my_log(-10.9372*err_time+11430)+3.019-0.5+2.2;
-//					temp_cnt = 0;
-//				}
-//				else if(err_time>=2000)
-//				{
-//					d_distance = d_distance-0.0004*err_time-4.0737-0.5+2.2;
-//					temp_cnt = 0;
-//				}
-//				else if(err_time<1150)
-//				{
-//					d_distance = d_distance-0.5;
-//					temp_cnt = 0;
-//				}
-//				else//当阈值时间差处于1200~1500时
-//				{
-//					if(temp_cnt<6)//连续10次测到阈值时间差1200~1500时，输出一个差不多的数据吧，总比没数据强
-//					{
-//						CH_DATA temp;
-//						temp_cnt++;
-//						temp.f_data = 0xFF;
-//						temp.h_data = 0xFF;
-//						temp.l_data = 0xFF;
-//						d_distance = ch_data_dou(&temp);
-//					}
-//					else
-//					{
-//						d_distance = d_distance-0.5;
-//						//d_distance = d_distance-0.0004*err_time-4.0737;
-//						temp_cnt = 0;
-//					}					
-//				
-					d_distance = d_distance-coe;
-				//}
-				//if(err_time>1500&&err_time<2000)
-				//{
-				//	d_distance = d_distance-0.8541*my_log(-10.9372*err_time+11430)+3.019-0.5+2.2;
-				//}
-			}
-			else
-			{
-				temp_cnt = 0;
-				if(err_time>1100&&err_time<2000)
-				{
-					d_distance = d_distance-0.8541*my_log(-10.9372*err_time+11430)+3.019-coe+2.2;
-				}
-				else if(err_time>=2000)
-				{
-					d_distance = d_distance-0.0004*err_time-4.0737-coe+2.2;
-				}
-				else
-				{
-					d_distance = d_distance-coe;
-				}
-			}
-			
+				case wall://测墙模式
+					if(org_data<50)
+					{	
+							d_distance = d_distance-coe;
+					}
+					else
+					{
+						d_distance = multi_thread_adj(&org_data,&err_time);
+					}
+					break;
+				case line://测线模式
+					d_distance = multi_thread_adj(&org_data,&err_time);
+					break;
+				default:break;
+			}			
 			#endif
 			if(outmode == 1)//串口助手调试输出格式
 			{
@@ -569,11 +527,9 @@ void master_task(void *pdata)
 	INT8U master_i;
 	long d_sum = 0;//距离求和
 	#endif
-	
 	AGC_EN = 1;
 	while(1)
 	{
-		out_mode_set();//数据输出模式按键检测
 		if(outmode==1)
 		{
 			OS_ENTER_CRITICAL();
@@ -676,19 +632,8 @@ void master_task(void *pdata)
 			d_distance = (1.5*(double)time_ps)/10000;
 			//d_distance = u32_dou(distance);//转化为double
 			//通过阈值拟合校准
-			#ifdef MULTI_VTH
-			if(err_time>1120&&err_time<2000)
-			{
-				d_distance = d_distance-0.8541*my_log(-10.9372*err_time+11430)+3.019;
-			}
-			else if(err_time>=2000)
-			{
-				d_distance = d_distance-0.0004*err_time-4.0737;
-			}
-			else
-			{
-				d_distance = d_distance-2.71;
-			}
+			#ifdef MULTI_VTH			
+			d_distance = multi_thread_adj(&d_distance,&time_ps);
 			#endif
 			if(outmode == 1)//串口助手调试输出格式
 			{
@@ -729,8 +674,7 @@ void master_task(void *pdata)
 						OS_ENTER_CRITICAL();
 						printf("AGC task resume1\n");
 						OS_EXIT_CRITICAL();
-					}
-						
+					}						
 				}			
 			}
 			else
@@ -838,7 +782,6 @@ void gen_task(void *pdata)
 {
 	OS_CPU_SR cpu_sr=0;
 	/* TDC-GPX2 测量结果 */
-	result measure_data;
 	result measure_data_arr[MEASURE_DATA_ARR_SIZE];
 	INT8U res_cnt;
 	INT8U i_gen;
@@ -870,19 +813,12 @@ void gen_task(void *pdata)
 		start_index = measure_data_arr[0].reference_index[0];
 		for(i_gen=0;i_gen<res_cnt;i_gen++)
 		{
-			//飞行时间计算
+			//测量阈值飞行时间计算
 			time_ps = measure_data_arr[i_gen].stopresult[1] - start_res+\
 								(measure_data_arr[i_gen].reference_index[1]-start_index)*refclk_divisions;
-			//vth1--vth2阈值时间差计算
-			//err_time1 = measure_data_arr[i_gen].stopresult[2] - measure_data_arr[i_gen].stopresult[1]+\
-								(measure_data_arr[i_gen].reference_index[2]-measure_data_arr[i_gen].reference_index[1])*refclk_divisions;
-			//OS_ENTER_CRITICAL();
+			//探测阈值飞行时间
 			time_ps_detect = measure_data_arr[i_gen].stopresult[2] - start_res+\
 								(measure_data_arr[i_gen].reference_index[2]-start_index)*refclk_divisions;
-			//OS_EXIT_CRITICAL();
-			//vth2--vth3阈值时间差计算
-			//err_time2 = measure_data.stopresult[3] - measure_data.stopresult[2]+\
-								(measure_data.reference_index[3]-measure_data.reference_index[2])*refclk_divisions;
 			//vth1--vth3阈值时间差计算
 			err_time3 = measure_data_arr[i_gen].stopresult[3] - measure_data_arr[i_gen].stopresult[1]+\
 								(measure_data_arr[i_gen].reference_index[3]-measure_data_arr[i_gen].reference_index[1])*refclk_divisions;
@@ -900,19 +836,46 @@ void gen_task(void *pdata)
 				data_vaild = 0;
 			
 			#else
+			switch (measure_mode)
+			{
+				case wall://测墙模式数据筛选
+					if((quantify>GAIN_TH)&&(time_ps<TIME_PS_TH))//增益大，距离近的去掉,干掉干扰脉冲
+					{
+							data_vaild = 0;
+					}
+					else if(err_time3>MAX_ERR_TIME||err_time3<MIN_ERR_TIME)//阈值时间差有误的去掉
+					{
+						//if(time_ps<200000&&err_time3>2000)//判断是测墙模式下近距离测了线  30米，时间差2000
+						//{
+						//	measure_mode = line;//切换至测线模式
+						//}
+						data_vaild = 0;		
+					}
+					else
+					{
+						data_vaild = 1;
+					}
+					break;
+				case line://测线模式数据筛选
+					if((quantify>GAIN_TH)&&(time_ps<TIME_PS_TH)&&err_time3>3000)//增益大，距离近的，阈值时间差大的去掉
+					{
+							data_vaild = 0;
+					}
+					else if(err_time3>MAX_ERR_TIME||err_time3<2000)//阈值时间差有误的去掉，测线模式只取反射弱没饱和的回波
+					{
+						//if(err_time3<1100)//判断是在测线模式下测了墙
+						//{
+						//	measure_mode = wall;//切换至测墙模式
+						//}
+						data_vaild = 0;						
+					}
+					else
+					{
+						data_vaild = 1;
+					}
+					break;
+			}
 			
-			if((quantify>GAIN_TH)&&(time_ps<TIME_PS_TH))
-			{
-					data_vaild = 0;
-			}
-			else if(err_time3>MAX_ERR_TIME||err_time3<MIN_ERR_TIME)
-			{
-				data_vaild = 0;		
-			}
-			else
-			{
-				data_vaild = 1;
-			}
 			#endif
 			if(time_ps_detect>0&&time_ps_detect<10000000&&quantify<=GAIN_TH)
 			{
@@ -931,25 +894,8 @@ void gen_task(void *pdata)
 			{
 				org_data_ite = 0;
 				OSQPost(q_msg,org_data);//发送消息队列
-			}		
-			
+			}					
 		}
-		//飞行时间计算
-		//time_ps = measure_data.stopresult[1] - measure_data.stopresult[0]+\
-							(measure_data.reference_index[1]-measure_data.reference_index[0])*refclk_divisions;
-		//vth1--vth2阈值时间差计算
-		//err_time1 = measure_data.stopresult[2] - measure_data.stopresult[1]+\
-							(measure_data.reference_index[2]-measure_data.reference_index[1])*refclk_divisions;
-		//vth2--vth3阈值时间差计算
-		//err_time2 = measure_data.stopresult[3] - measure_data.stopresult[2]+\
-							(measure_data.reference_index[3]-measure_data.reference_index[2])*refclk_divisions;
-		//vth1--vth3阈值时间差计算
-		//err_time3 = measure_data.stopresult[3] - measure_data.stopresult[1]+\
-							(measure_data.reference_index[3]-measure_data.reference_index[1])*refclk_divisions;
-		//距离计算
-		//distance = (1.5*(double)time_ps)/10000;
-		
-
 		delay_ms(10);
 	}
 }
@@ -962,7 +908,8 @@ void handle_task(void *pdata)
 	INT8U err;
 	TIME_DATA time_data[DATA_GROUP_SIZE];//待处理数据缓冲区
 	int handle_i;
-	INT32U mid_pos = DATA_GROUP_SIZE/2;
+	INT8U mid_pos = DATA_GROUP_SIZE/2;
+	INT8U ans_pos = 0; 
 	
 	while(1)
 	{
@@ -980,8 +927,18 @@ void handle_task(void *pdata)
 				time_data[handle_i] = res[handle_i];
 			}
 			
-			/* 中值滤波 */
 			quick_sort_time_data(time_data,DATA_GROUP_SIZE);//快速排序
+			switch(measure_mode)
+			{
+				case wall:
+					ans_pos = mid_pos;//结果取中值
+					break;
+				case line:
+					ans_pos = 0;//结果取
+					break;
+				default:break;
+			}
+			
 			/* 将取得的中值加入ans_buf结果缓冲区 */
 			OS_ENTER_CRITICAL();//ans_buf  ans_cnt  ans_ite 为临界资源
 			if(ans_cnt<ANS_BUF_SIZE)
@@ -990,12 +947,12 @@ void handle_task(void *pdata)
 			}
 			if(ans_ite==ANS_BUF_SIZE-1)//如果缓冲区已满，覆盖最开始的数据
 			{
-				ans_buf[ans_ite] = time_data[mid_pos];
+				ans_buf[ans_ite] = time_data[ans_pos];
 				ans_ite = 0;
 			}
 			else
 			{						
-				ans_buf[ans_ite++] = time_data[mid_pos];	
+				ans_buf[ans_ite++] = time_data[ans_pos];	
 			}
 			OS_EXIT_CRITICAL();			
 		}
@@ -1085,18 +1042,21 @@ void adj_task(void *pdata)
 #endif
 
 /* 设置数据输出格式 */
-/* OUT_MODE按键为1时输出字符串格式 */
-/* OUT_MODE按键为0时输出字节流格式 */
+/* outmode为1时输出字符串格式 */
+/* outmode为0时输出字节流格式 */
+/* MODE为0时测墙模式 */
+/* MODE为1时测线模式 */
 void out_mode_set()
 {
 	/* 输出模式设定 */
-		if(OUT_MODE==1)
+	outmode = 0;
+		if(MODE==1)
 		{
-			outmode = 1;
+			measure_mode = line;
 		}
 		else
 		{
-			outmode = 0;
+			measure_mode = wall;
 		}
 }
 
@@ -1348,5 +1308,24 @@ void create_time_data(TIME_DATA* ptime_data,INT32U time_ps,INT32U err_time1,INT3
 	ptime_data->err_time1 = err_time1;
 	ptime_data->err_time2 = err_time2;
 	ptime_data->err_time3 = err_time3;
+}
+
+/* 多阈值数据拟合 */
+double multi_thread_adj(double *org,unsigned int *time)
+{
+	double ans;
+	if(*time>1100&&*time<2000)
+	{
+		ans = *org-0.8541*my_log(-10.9372*(*time)+11430)+3.019-coe+2.2;
+	}
+	else if((*time)>=2000)
+	{
+		ans = *org-0.0004*(*time)-4.0737-coe+2.2;
+	}
+	else
+	{
+		ans = *org-coe;
+	}
+	return ans;
 }
 
