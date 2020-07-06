@@ -87,7 +87,7 @@
 /* 通过注释或定义宏选择模式 */
 
 //#define ADJ //校准调试模式 ,定义它将会启动校准模式
-#define MULTI_VTH           //定义它将会把结果进行多阈值拟合校准
+//#define MULTI_VTH           //定义它将会把结果进行多阈值拟合校准
 //#define AGC_LOW   //如果定义AGC_LOW,AGC控制会将高于CONTROL_MAX_VOLTAGE的时候减少增益，否则只会增大增益
 #define AUTO_LEVEL_MOD //自动档位切换模式 不定义则为AGC模式
 //#define ARGV  //是否将缓冲区结果求平均，不然取中值
@@ -137,7 +137,7 @@ const INT16U LEVEL[MAX_LEVEL] =
 ///* 增益档位表 */
 //const INT16U LEVEL[MAX_LEVEL] = 
 //{
-//	1200
+//	1100
 //};
 INT8U level = 0;//档位
 
@@ -149,7 +149,7 @@ OS_STK START_TASK_STAK[START_STAK_SIZE];//开始任务堆栈
 
 //设置主控线程优先级最高
 #define MASTER_TASK_PRIO 5
-#define MASTER_STAK_SIZE 128
+#define MASTER_STAK_SIZE 256
 __align(8) OS_STK MASTER_TASK_STAK[MASTER_STAK_SIZE];
 
 //设置激光测距生产者任务
@@ -203,13 +203,13 @@ INT8U ans_cnt = 0;//缓冲区中结果数量
 #define QUANTIFY_INIT 1200  //初始化增益值 DAC
 #define START_THREAD 80			
 #define STOP_THREAD1 60
-#define STOP_THREAD2 100
+#define STOP_THREAD2 80
 #define STOP_THREAD3 80
 
 /* 数据筛选校准参数 */
 #define GAIN_TH 1200      //增益限值
 #define DISTANCE_TH 21    //距离限制
-#define TIME_PS_TH 140000 //21米的时间
+#define TIME_PS_TH 100000 //15米的时间 
 #define MAX_TIME 10000000 //最大飞行时间 1500米的时间 ps
 #define MIN_TIME 0        //最小飞行时间  
 #define DETECT_MIN_TIME 300000 //探测阈值最小飞行时间 45m
@@ -266,7 +266,7 @@ int main(void)
 	write_wa(STOP_THREAD2,&TPL2_CS,&TPL2_CLK,&TPL2_D);//set voltage thread of stop2 pulse
 	write_wb(STOP_THREAD3,&TPL2_CS,&TPL2_CLK,&TPL2_D);//set voltage thread of stop3 pulse
 	setRefValue(REF1);//set tlv5636 ref voltage mode
-	//quantify = 1800;
+	//quantify = 1500;
 	setDacValueBin(quantify);//初始化DAC输出电压,默认增益
 	
 	/*test*/
@@ -275,7 +275,7 @@ int main(void)
 //		//tdc_measure_group(test);
 //		laser_plus();
 //		//printf("test1\n");
-//		delay_ms(10);
+//		delay_ms(50);
 //	}
 	
 	//delay_ms(100);
@@ -312,7 +312,7 @@ void start_task(void *pdata)
 	OS_EXIT_CRITICAL();//退出临界区，开中断
 }
 
-
+#define coe 1.4
 /* 主任务 */
 void master_task(void *pdata)
 {
@@ -371,7 +371,7 @@ void master_task(void *pdata)
 			time_ps = ans_buf[ans_cnt/2].time_ps;
 			err_time = ans_buf[ans_cnt/2].err_time3;
 			#endif
-			if(time_ps<150000&&err_time>2200)//数据挑选，阈值时间差，距离
+			if(time_ps<TIME_PS_TH&&err_time>2200)//数据挑选，阈值时间差，距离
 			{				
 				recive_flag = 0;
 			}
@@ -386,7 +386,16 @@ void master_task(void *pdata)
 		}
 		else//缓冲区没有数据，标记为0
 		{
-			recive_flag = 0;
+			//printf("de:%.2f\n",(1.5*(double)detect_val)/10000);
+			//if(detect_val>100000)
+				recive_flag = 0;
+			//else
+			//{
+			//	recive_flag = 1;
+				//time_ps = detect_val;
+				//detect_val = 0xFFFFFFFF;
+				//printf("de:%.2f\n",(1.5*(double)time_ps)/10000);
+			//}
 		}
 		OS_EXIT_CRITICAL();
 		if(recive_flag)//缓冲区有数据
@@ -403,61 +412,69 @@ void master_task(void *pdata)
 			//d_distance = u32_dou(distance);//转化为double
 			if(outmode==1)
 			{
+				OS_ENTER_CRITICAL();
 				printf("ORG:%.2f %d\n",org_data,err_time);
+				OS_EXIT_CRITICAL();
 			}
 			
 			//通过阈值拟合校准
 			#ifdef MULTI_VTH
-			if(org_data<25.01)//近距离测量时跳过1200~1500的非线性区域
+			if(org_data<15.01)
 			{
-				if(err_time>1500&&err_time<2000)
-				{
-					d_distance = d_distance-0.8541*my_log(-10.9372*err_time+11430)+3.019-0.5+2.2;
-					temp_cnt = 0;
-				}
-				else if(err_time>=2000)
-				{
-					d_distance = d_distance-0.0004*err_time-4.0737-0.5+2.2;
-					temp_cnt = 0;
-				}
-				else if(err_time<1150)
-				{
-					d_distance = d_distance-0.5;
-					temp_cnt = 0;
-				}
-				else//当阈值时间差处于1200~1500时
-				{
-					if(temp_cnt<6)//连续10次测到阈值时间差1200~1500时，输出一个差不多的数据吧，总比没数据强
-					{
-						CH_DATA temp;
-						temp_cnt++;
-						temp.f_data = 0xFF;
-						temp.h_data = 0xFF;
-						temp.l_data = 0xFF;
-						d_distance = ch_data_dou(&temp);
-					}
-					else
-					{
-						d_distance = d_distance-0.5;
-						//d_distance = d_distance-0.0004*err_time-4.0737;
-						temp_cnt = 0;
-					}					
-				}
+//				if(err_time>1500&&err_time<2000)
+//				{
+//					d_distance = d_distance-0.8541*my_log(-10.9372*err_time+11430)+3.019-0.5+2.2;
+//					temp_cnt = 0;
+//				}
+//				else if(err_time>=2000)
+//				{
+//					d_distance = d_distance-0.0004*err_time-4.0737-0.5+2.2;
+//					temp_cnt = 0;
+//				}
+//				else if(err_time<1150)
+//				{
+//					d_distance = d_distance-0.5;
+//					temp_cnt = 0;
+//				}
+//				else//当阈值时间差处于1200~1500时
+//				{
+//					if(temp_cnt<6)//连续10次测到阈值时间差1200~1500时，输出一个差不多的数据吧，总比没数据强
+//					{
+//						CH_DATA temp;
+//						temp_cnt++;
+//						temp.f_data = 0xFF;
+//						temp.h_data = 0xFF;
+//						temp.l_data = 0xFF;
+//						d_distance = ch_data_dou(&temp);
+//					}
+//					else
+//					{
+//						d_distance = d_distance-0.5;
+//						//d_distance = d_distance-0.0004*err_time-4.0737;
+//						temp_cnt = 0;
+//					}					
+//				
+					d_distance = d_distance-coe;
+				//}
+				//if(err_time>1500&&err_time<2000)
+				//{
+				//	d_distance = d_distance-0.8541*my_log(-10.9372*err_time+11430)+3.019-0.5+2.2;
+				//}
 			}
 			else
 			{
 				temp_cnt = 0;
-				if(err_time>1120&&err_time<2000)
+				if(err_time>1100&&err_time<2000)
 				{
-					d_distance = d_distance-0.8541*my_log(-10.9372*err_time+11430)+3.019-0.5+2.2;
+					d_distance = d_distance-0.8541*my_log(-10.9372*err_time+11430)+3.019-coe+2.2;
 				}
 				else if(err_time>=2000)
 				{
-					d_distance = d_distance-0.0004*err_time-4.0737-0.5+2.2;
+					d_distance = d_distance-0.0004*err_time-4.0737-coe+2.2;
 				}
 				else
 				{
-					d_distance = d_distance-0.5;
+					d_distance = d_distance-coe;
 				}
 			}
 			
@@ -837,6 +854,7 @@ void gen_task(void *pdata)
 	TIME_DATA time_data;
 	unsigned int org_data_ite = 0;
 	INT8U data_vaild;
+	detect_val = 0xFFFFFFFF;
 	//test 
 	//OSTaskSuspend(GEN_TASK_PRIO);
 	
@@ -856,8 +874,12 @@ void gen_task(void *pdata)
 			time_ps = measure_data_arr[i_gen].stopresult[1] - start_res+\
 								(measure_data_arr[i_gen].reference_index[1]-start_index)*refclk_divisions;
 			//vth1--vth2阈值时间差计算
-			err_time1 = measure_data_arr[i_gen].stopresult[2] - measure_data_arr[i_gen].stopresult[1]+\
+			//err_time1 = measure_data_arr[i_gen].stopresult[2] - measure_data_arr[i_gen].stopresult[1]+\
 								(measure_data_arr[i_gen].reference_index[2]-measure_data_arr[i_gen].reference_index[1])*refclk_divisions;
+			//OS_ENTER_CRITICAL();
+			time_ps_detect = measure_data_arr[i_gen].stopresult[2] - start_res+\
+								(measure_data_arr[i_gen].reference_index[2]-start_index)*refclk_divisions;
+			//OS_EXIT_CRITICAL();
 			//vth2--vth3阈值时间差计算
 			//err_time2 = measure_data.stopresult[3] - measure_data.stopresult[2]+\
 								(measure_data.reference_index[3]-measure_data.reference_index[2])*refclk_divisions;
@@ -892,7 +914,12 @@ void gen_task(void *pdata)
 				data_vaild = 1;
 			}
 			#endif
-			
+			if(time_ps_detect>0&&time_ps_detect<10000000&&quantify<=GAIN_TH)
+			{
+				OS_ENTER_CRITICAL();
+				detect_val = time_ps_detect;
+				OS_EXIT_CRITICAL();
+			}
 			if(time_ps>MAX_TIME||time_ps<=MIN_TIME||data_vaild==0)//当前没有数据
 			{
 				continue;
